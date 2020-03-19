@@ -53,6 +53,11 @@ trait Attachable extends LazyScope
   val ibus: InterruptBusWrapper
 }
 
+trait HierarchicalLocation
+
+case object InSubsystem extends HierarchicalLocation
+case object InSystem extends HierarchicalLocation
+
 trait HasBusLocationFunction {
   type BusLocationFunction = PartialFunction[TLBusWrapperLocation, TLBusWrapper]
   def locateTLBusWrapper: BusLocationFunction
