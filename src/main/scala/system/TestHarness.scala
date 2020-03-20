@@ -4,7 +4,6 @@ package freechips.rocketchip.system
 
 import Chisel._
 import freechips.rocketchip.config.Parameters
-import freechips.rocketchip.devices.debug.Debug
 import freechips.rocketchip.diplomacy.LazyModule
 
 class TestHarness()(implicit p: Parameters) extends Module {
@@ -20,5 +19,5 @@ class TestHarness()(implicit p: Parameters) extends Module {
   dut.connectSimAXIMem()
   dut.connectSimAXIMMIO()
   dut.l2_frontend_bus_axi4.foreach(_.tieoff)
-  Debug.connectDebug(dut.debug, clock, reset, io.success)
+  dut.connectDebug(clock, reset, io.success)
 }

@@ -86,7 +86,6 @@ abstract class DeviceSnippet extends Device
 object Device
 {
   private var index: Int = 0
-  def skipIndexes(x: Int) { index += x }
 }
 
 /** A trait for devices that generate interrupts. */
@@ -148,7 +147,7 @@ trait DeviceRegName
       require (!mainreg.isEmpty, s"reg binding for $devname is empty!")
       mainreg.head.value match {
         case x: ResourceAddress => s"${devname}@${x.address.head.base.toString(16)}"
-        case _ => require(false, s"Device has the wrong type of 'reg' property (${reg.head})"); ""
+        case _ => require(false, "Device has the wrong type of 'reg' property (${reg.head})"); ""
       }
     }
   }
@@ -236,7 +235,7 @@ class MemoryDevice extends Device with DeviceRegName
 {
   def describe(resources: ResourceBindings): Description = {
     Description(describeName("memory", resources), ListMap(
-      "reg"         -> resources.map.filterKeys(regFilter).flatMap(_._2).map(_.value).toList,
+      "reg"         -> resources("reg").map(_.value),
       "device_type" -> Seq(ResourceString("memory"))))
   }
 }

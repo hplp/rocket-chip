@@ -3,12 +3,10 @@
 package freechips.rocketchip.subsystem
 
 import Chisel._
-import freechips.rocketchip.config.{Parameters, Field}
+import freechips.rocketchip.config.Parameters
 import freechips.rocketchip.diplomacy._
 import freechips.rocketchip.tilelink._
 import freechips.rocketchip.util._
-
-case object BuildSystemBus extends Field[Parameters => SystemBus](p => new SystemBus(p(SystemBusKey))(p))
 
 /** BareSubsystem is the root class for creating a subsystem */
 abstract class BareSubsystem(implicit p: Parameters) extends LazyModule with BindingScope {
@@ -33,36 +31,43 @@ abstract class BaseSubsystem(implicit p: Parameters) extends BareSubsystem {
   // These are wrappers around the standard buses available in all subsytems, where
   // peripherals, tiles, ports, and other masters and slaves can attach themselves.
   val ibus = new InterruptBusWrapper()
-  val sbus = LazyModule(p(BuildSystemBus)(p))
+  val sbus = LazyModule(new SystemBus(p(SystemBusKey)))
   val pbus = LazyModule(new PeripheryBus(p(PeripheryBusKey)))
   val fbus = LazyModule(new FrontBus(p(FrontBusKey)))
 
   // The sbus masters the pbus; here we convert TL-UH -> TL-UL
-  pbus.crossFromControlBus { sbus.control_bus.toSlaveBus("pbus") }
+  pbus.fromSystemBus { sbus.toPeripheryBus { pbus.crossTLIn } }
 
   // The fbus masters the sbus; both are TL-UH or TL-C
   FlipRendering { implicit p =>
-    fbus.crossToSystemBus { sbus.fromMasterBus("fbus") }
+    fbus.toSystemBus { sbus.fromFrontBus { fbus.crossTLOut } }
   }
 
   // The sbus masters the mbus; here we convert TL-C -> TL-UH
   private val mbusParams = p(MemoryBusKey)
   private val l2Params = p(BankedL2Key)
-  val MemoryBusParams(memBusBeatBytes, memBusBlockBytes, _, _) = mbusParams
-  val BankedL2Params(nBanks, coherenceManager) = l2Params
+  val MemoryBusParams(memBusBeatBytes, memBusBlockBytes) = mbusParams
+  val BankedL2Params(nMemoryChannels, nBanksPerChannel, coherenceManager) = l2Params
+  val nBanks = l2Params.nBanks
   val cacheBlockBytes = memBusBlockBytes
   // TODO: the below call to coherenceManager should be wrapped in a LazyScope here,
   //       but plumbing halt is too annoying for now.
   private val (in, out, halt) = coherenceManager(this)
   def memBusCanCauseHalt: () => Option[Bool] = halt
 
-  require (isPow2(nBanks) || nBanks == 0)
+  require (isPow2(nMemoryChannels) || nMemoryChannels == 0)
+  require (isPow2(nBanksPerChannel))
   require (isPow2(memBusBlockBytes))
 
-  val mbus = LazyModule(new MemoryBus(mbusParams))
-  if (nBanks != 0) {
-    sbus.coupleTo("mbus") { in :*= _ }
-    mbus.coupleFrom(s"coherence_manager") { _ :=* BankBinder(cacheBlockBytes * (nBanks-1)) :*= out }
+  private val mask = ~BigInt((nBanks-1) * memBusBlockBytes)
+  val memBuses = Seq.tabulate(nMemoryChannels) { channel =>
+    val mbus = LazyModule(new MemoryBus(mbusParams)(p))
+    for (bank <- 0 until nBanksPerChannel) {
+      val offset = (bank * nMemoryChannels) + channel
+      ForceFanout(a = true) { implicit p => sbus.toMemoryBus { in } }
+      mbus.fromCoherenceManager(None) { TLFilter(TLFilter.Mmask(AddressSet(offset * memBusBlockBytes, mask))) } := out
+    }
+    mbus
   }
 
   lazy val topManagers = ManagerUnification(sbus.busView.manager.managers)

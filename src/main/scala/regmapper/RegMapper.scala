@@ -33,9 +33,7 @@ object RegMapper
 {
   // Create a generic register-based device
   def apply(bytes: Int, concurrency: Int, undefZero: Boolean, in: DecoupledIO[RegMapperInput], mapping: RegField.Map*)(implicit sourceInfo: SourceInfo) = {
-    // Filter out zero-width fields
-    val bytemap = mapping.toList.map { case (offset, fields) => (offset, fields.filter(_.width != 0)) }
-
+    val bytemap = mapping.toList
     // Negative addresses are bad
     bytemap.foreach { byte => require (byte._1 >= 0) }
 

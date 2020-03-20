@@ -62,6 +62,4 @@ package object diplomacy
   })
 
   implicit def moduleValue[T](value: ModuleValue[T]): T = value.getWrappedValue
-
-  implicit def noCrossing(value: NoCrossing.type): ClockCrossingType = SynchronousCrossing(BufferParams.none)
 }

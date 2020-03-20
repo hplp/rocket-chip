@@ -6,7 +6,7 @@ import Chisel._
 import chisel3.experimental.dontTouch
 import freechips.rocketchip.config.Parameters
 import freechips.rocketchip.devices.debug.TLDebugModule
-import freechips.rocketchip.devices.tilelink.{BasicBusBlocker, BasicBusBlockerParams, CLINT, CLINTConsts, TLPLIC, PLICKey}
+import freechips.rocketchip.devices.tilelink.{BasicBusBlocker, BasicBusBlockerParams, CLINT, CLINTConsts, TLPLIC}
 import freechips.rocketchip.diplomacy._
 import freechips.rocketchip.interrupts._
 import freechips.rocketchip.tile.{BaseTile, LookupByHartId, LookupByHartIdImpl, TileKey, TileParams, SharedMemoryTLEdge, HasExternallyDrivenTileConstants}
@@ -25,10 +25,6 @@ trait HasTiles { this: BaseSubsystem =>
   def hartIdList: Seq[Int] = tileParams.map(_.hartId)
   def localIntCounts: Seq[Int] = tileParams.map(_.core.nLocalInterrupts)
   def sharedMemoryTLEdge = sbus.busView
-  val meipNode = p(PLICKey) match {
-    case Some(_) => None
-    case None    => Some(IntSourceNode(IntSourcePortSimple(num = 1, ports = 1, sources = 1)))
-  }
 
   private val lookupByHartId = new LookupByHartIdImpl {
     def apply[T <: Data](f: TileParams => Option[T], hartId: UInt): T =
@@ -44,25 +40,42 @@ trait HasTiles { this: BaseSubsystem =>
   }
 
   protected def connectMasterPortsToSBus(tile: BaseTile, crossing: RocketCrossingParams) {
+    def tileMasterBuffering: TLOutwardNode = tile {
+      crossing.crossingType match {
+        case _: AsynchronousCrossing => tile.masterNode
+        case SynchronousCrossing(b) =>
+          tile.masterNode
+        case RationalCrossing(dir) =>
+          require (dir != SlowToFast, "Misconfiguration? Core slower than fabric")
+          tile.makeMasterBoundaryBuffers :=* tile.masterNode
+      }
+    }
+
     sbus.fromTile(tile.tileParams.name, crossing.master.buffers) {
         crossing.master.cork
           .map { u => TLCacheCork(unsafe = u) }
-          .map { _ :=* tile.crossMasterPort() }
-          .getOrElse { tile.crossMasterPort() }
-    }
+          .map { _ :=* tile.crossTLOut }
+          .getOrElse { tile.crossTLOut }
+    } :=* tileMasterBuffering
   }
 
   protected def connectSlavePortsToCBus(tile: BaseTile, crossing: RocketCrossingParams)(implicit valName: ValName) {
+    def tileSlaveBuffering: TLInwardNode = tile {
+      crossing.crossingType match {
+        case RationalCrossing(_) => tile.slaveNode :*= tile.makeSlaveBoundaryBuffers
+        case _ => tile.slaveNode
+      }
+    }
 
     DisableMonitors { implicit p =>
-      sbus.control_bus.toTile(tile.tileParams.name) {
+      tileSlaveBuffering :*= sbus.control_bus.toTile(tile.tileParams.name) {
         crossing.slave.blockerCtrlAddr
           .map { BasicBusBlockerParams(_, pbus.beatBytes, sbus.beatBytes) }
           .map { bbbp => LazyModule(new BasicBusBlocker(bbbp)) }
           .map { bbb =>
             sbus.control_bus.toVariableWidthSlave(Some("bus_blocker")) { bbb.controlNode }
-            tile.crossSlavePort() :*= bbb.node
-          } .getOrElse { tile.crossSlavePort() }
+            tile.crossTLIn :*= bbb.node
+          } .getOrElse { tile.crossTLIn }
       }
     }
   }
@@ -83,19 +96,22 @@ trait HasTiles { this: BaseSubsystem =>
     //    so might need to be synchronized depending on the Tile's crossing type.
 
     //    From CLINT: "msip" and "mtip"
-    tile.crossIntIn() :=
-      clintOpt.map { _.intnode }
+    tile.intInwardNode :=
+      clintOpt
+        .map { tile.crossIntIn := _.intnode }
         .getOrElse { NullIntSource(sources = CLINTConsts.ints) }
 
-    //    From PLIC: "meip"
-    tile.crossIntIn() :=
-      plicOpt .map { _.intnode }
-        .getOrElse { meipNode.get }
+    //    From PLIC: "meip" (TODO: should come from external source if no PLIC)
+    tile.intInwardNode :=
+      plicOpt
+        .map { tile.crossIntIn := _.intnode }
+        .getOrElse { NullIntSource() }
 
     //    From PLIC: "seip" (only if vm/supervisor mode is enabled)
     if (tile.tileParams.core.useVM) {
-      tile.crossIntIn() :=
-        plicOpt .map { _.intnode }
+      tile.intInwardNode :=
+        plicOpt
+          .map { tile.crossIntIn := _.intnode }
           .getOrElse { NullIntSource() }
     }
 
@@ -106,7 +122,7 @@ trait HasTiles { this: BaseSubsystem =>
     //    so might need to be synchronized depending on the Tile's crossing type.
     plicOpt.foreach { plic =>
       FlipRendering { implicit p =>
-        plic.intnode :=* tile.crossIntOut()
+        plic.intnode :=* tile.crossIntOut :=* tile.intOutwardNode
       }
     }
   }
@@ -145,7 +161,5 @@ trait HasTilesModuleImp extends LazyModuleImp
     tile.constants.hartid := wire.hartid
     tile.constants.reset_vector := wire.reset_vector
   }
-
-  val meip = if(outer.meipNode.isDefined) Some(IO(Bool(INPUT))) else None
-  meip.foreach { (outer.meipNode.get.out(0)._1)(0) := _ }
 }
+

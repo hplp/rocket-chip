@@ -207,7 +207,6 @@ class SimpleLazyModule(implicit p: Parameters) extends LazyModule
 trait LazyScope
 {
   this: LazyModule =>
-  override def toString: String = s"LazyScope named $name"
   def apply[T](body: => T) = {
     val saved = LazyModule.scope
     LazyModule.scope = Some(this)
@@ -221,12 +220,10 @@ trait LazyScope
 
 object LazyScope
 {
-  def apply[T](body: => T)(implicit valName: ValName, p: Parameters): T = {
+  def apply[T](name: String)(body: => T)(implicit p: Parameters) = {
     val scope = LazyModule(new SimpleLazyModule with LazyScope)
+    scope.suggestName(name)
     scope { body }
-  }
-  def apply[T](name: String)(body: => T)(implicit p: Parameters): T = {
-    apply(body)(ValName(name), p)
   }
 }
 

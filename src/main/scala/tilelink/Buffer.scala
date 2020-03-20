@@ -77,8 +77,6 @@ object TLBuffer
   }
 
   def chainNode(depth: Int, name: Option[String] = None)(implicit p: Parameters): TLNode = {
-    chain(depth, name)
-      .reduceLeftOption(_ :*=* _)
-      .getOrElse(TLNameNode("no_buffer"))
+    chain(depth, name).reduceLeftOption(_ :*=* _).getOrElse(TLIdentity.gen)
   }
 }
